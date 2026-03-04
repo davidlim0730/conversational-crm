@@ -1,4 +1,4 @@
-# Product Documentation: The 3-Minute Ritual (Invisible CRM)
+# Product Documentation: Conversational CRM (The 3-Minute Ritual)
 
 ## 1. 產品願景 (Product Vision)
 透過「意識流」文字輸入，讓 BD 人員（小王）在拜訪客戶後的空檔，能以最自然的語言完成 CRM 資料結構化更新與行程安排，消除進入系統填寫表單的行政負擔。
