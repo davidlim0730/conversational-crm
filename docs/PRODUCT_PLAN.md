@@ -47,7 +47,7 @@
 | :--- | :--- | :--- |
 | Project_ID | String | 主鍵 (格式: P-2025-0001) |
 | Entity_Name | String | 關聯 Entity_Index.Name |
-| Stage | Enum | 探索 / 提案 / 商議 / 贏單 / 輸單 / 觀察 |
+| Stage | Enum | 尋商 / 規格 / 提案 / 商議 / 贏單 / 輸單 / 暫緩 |
 | Est_Value | Number | 預估金額 (幣別統一) |
 | Next_Action_Date | Date | 下次跟進日期 |
 | Status_Summary | String | AI 生成的一句話現況 |
@@ -73,11 +73,32 @@
 
 ---
 
-## 4. 開發路線圖 (Roadmap)
+## 4. 產品願景路線圖 (Product Vision Roadmap)
+
+### Phase 1: MVP — Conversational CRM 概念驗證 (Current)
+以單一使用者（BD 小王）為對象，驗證核心假設：**對話式輸入能否真正取代傳統 GUI / 手 key 的 CRM 流程**。
+- 意識流文字輸入 → AI 解析 → 自動更新 Sheets & Calendar。
+- 成功標準：BD 回報效率顯著優於手動操作，無須開啟任何表單介面。
+
+### Phase 2: 多人協作 (Team Collaboration)
+從個人工具擴展為部門級協作平台。
+- 支援多位業務同時使用，資料自動歸屬各自負責的客戶。
+- 整個部門的 Pipeline 可被共同檢視與管理。
+
+### Phase 3: 資料探索與自動化 (Data Intelligence & Automation)
+當資料規模累積後，釋放數據價值。
+- 向量搜尋：跨互動紀錄的語意檢索（如「上次跟台積電聊到什麼？」）。
+- AI Insight 生成：從歷史數據自動產出商機洞察與趨勢分析。
+- 自動化追蹤：定期商機健康檢查，主動提醒逾期或沉睡案件。
+- 主管 BI：類似 BI Dashboard 的資料探索介面，供主管掌握全局。
+
+---
+
+## 5. 開發時程 (Development Phases)
 
 ### Phase 1: Foundation (Current)
 - [x] 初始化 Git 版本控制。
-- [ ] **Next**: 撰寫 `init_sheets.js` 自動化建立資料庫結構。
+- [x] 撰寫 `init_sheets.js` 自動化建立資料庫結構。
 
 ### Phase 2: Intelligence (NLU)
 - [ ] 設計 Gemini 2.5 Flash System Prompt。

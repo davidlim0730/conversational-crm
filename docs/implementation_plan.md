@@ -15,7 +15,7 @@
 
 ### Phase 1: 基礎建設與版本管理 (Infra & Git)
 - [x] 初始化 Git 儲存庫。
-- [ ] 撰寫 Google Sheets 初始化腳本 (GAS)。
+- [x] 撰寫 Google Sheets 初始化腳本 (GAS)。
 - [ ] 定義專案目錄結構。
 
 ### Phase 2: NLU 解析模組 (Gemini NLU)
