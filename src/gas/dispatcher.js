@@ -1,24 +1,18 @@
 /**
  * Conversational CRM — dispatcher.js
- * Phase 3: GAS Dispatcher (Web App)
+ * Sprint 2+3: GAS Dispatcher (Web App)
  *
  * 功能：
- *   1. doPost 接收 Gemini NLU 輸出的 JSON
- *   2. 根據 intents 路由至對應的 Handler
- *   3. Fuzzy Matching 客戶名稱
- *   4. 寫入 Google Sheets（Entity / Pipeline / Interaction / Action）
- *   5. 串接 Google Calendar 建立行程，回填 GCal_Link
+ *   1. doPost 接收前端請求，依 action 路由
+ *   2. parseOnly  → 只呼叫 NLU，不寫入（由 gemini_nlu.js 處理）
+ *   3. confirmWrite → 接受使用者確認資料，寫入 Sheets + Slack 通知
+ *   4. retrySlack   → 重試 Slack 通知失敗的任務
+ *   5. Fuzzy Matching 客戶名稱
  *
  * 部署方式：
  *   GAS 編輯器 → 部署 → 新增部署 → Web 應用程式
  *   存取權限：「任何人」（或依安全需求調整）
  */
-
-// ============================================================
-// 設定常數
-// ============================================================
-
-// (Calendar 使用 getDefaultCalendar() ，不需要 CALENDAR_ID)
 
 // ============================================================
 // Web App 入口
@@ -35,27 +29,37 @@ function doGet() {
 }
 
 /**
- * 接收 POST 請求：
- *   - 若含 raw_text：完整流程（NLU → Dispatch → 回傳簡潔摘要給 UI）
- *   - 若含 intents：直接 Dispatch（供 testDispatcher 使用）
+ * 接收 POST 請求，依 action 欄位路由：
+ *   action: "parseOnly"    → 呼叫 NLU，不寫入，回傳解析 JSON
+ *   action: "confirmWrite" → 接受確認資料，寫入 Sheets + Slack
+ *   action: "retrySlack"   → 重試指定任務的 Slack 通知
  */
 function doPost(e) {
     try {
         const payload = JSON.parse(e.postData.contents);
+        const action = payload.action;
 
-        if (payload.raw_text) {
-            // ── 完整流程：raw text → Gemini NLU → Dispatch │
-            const parsed = callGeminiNLU(payload.raw_text);
-            const result = processPayload(parsed);
-            const summary = buildSummary(result, parsed);
+        if (action === 'parseOnly') {
+            const result = parseOnly(payload.raw_text);
             return ContentService
-                .createTextOutput(JSON.stringify({ status: 'success', summary: summary }))
+                .createTextOutput(JSON.stringify(result))
                 .setMimeType(ContentService.MimeType.JSON);
-        } else {
-            // ── 直接 Dispatch（供 testDispatcher 使用）──
-            const result = processPayload(payload);
+
+        } else if (action === 'confirmWrite') {
+            const result = confirmWrite(payload.confirmedData);
             return ContentService
-                .createTextOutput(JSON.stringify({ status: 'success', result: result }))
+                .createTextOutput(JSON.stringify(result))
+                .setMimeType(ContentService.MimeType.JSON);
+
+        } else if (action === 'retrySlack') {
+            const result = retrySlack(payload.actionData);
+            return ContentService
+                .createTextOutput(JSON.stringify(result))
+                .setMimeType(ContentService.MimeType.JSON);
+
+        } else {
+            return ContentService
+                .createTextOutput(JSON.stringify({ status: 'error', message: '未知的 action: ' + action }))
                 .setMimeType(ContentService.MimeType.JSON);
         }
 
@@ -67,43 +71,82 @@ function doPost(e) {
 }
 
 /**
- * 前端透過 google.script.run 呼叫的主函式
- * 繞過 CORS 問題，直接在 GAS 服務器端執行完整流程
- * @param {string} rawText - BD 輸入的原始文字
- * @returns {Object} { status, summary } 或 { status, message }
+ * 接受使用者確認後的 NLU 資料，執行 Sheets 寫入 + Slack 通知
+ * 供前端透過 google.script.run 呼叫（兩階段流程第二階段）
+ * @param {Object} confirmedData - NLU JSON（含 intents、entities 等）+ edit_log
+ * @returns {Object} { status: 'ok'|'partial_success'|'error', written, slackSent, ... }
  */
-function processRawText(rawText) {
+function confirmWrite(confirmedData) {
     try {
-        const parsed = callGeminiNLU(rawText);
-        const result = processPayload(parsed);
-        const summary = buildSummary(result, parsed);
-        return { status: 'success', summary: summary };
+        const result = processPayload_(confirmedData);
+        return {
+            status: result.slackFailed ? 'partial_success' : 'ok',
+            written: result.written,
+            slackSent: !result.slackFailed,
+            slackError: result.slackError || null
+        };
     } catch (error) {
         return { status: 'error', message: error.message };
     }
 }
 
 /**
- * 手動測試入口（可在 GAS 編輯器直接執行）
- * 將測試用的 JSON 貼在這裡
+ * 重試 Slack 通知失敗的任務
+ * 供前端透過 google.script.run 呼叫
+ * @param {Object} actionData - { task_id, entity_name, action_description, action_date }
+ * @returns {Object} { status: 'ok'|'error', message? }
+ */
+function retrySlack(actionData) {
+    try {
+        const slackResult = sendConfirmation(actionData);
+        if (!slackResult.success) {
+            return { status: 'error', message: slackResult.error };
+        }
+
+        // 更新 Action_Backlog：Slack_Notified=true、Slack_Notified_At=現在
+        const ss = SpreadsheetApp.getActiveSpreadsheet();
+        const sheet = ss.getSheetByName('Action_Backlog');
+        if (sheet && actionData.task_id) {
+            const data = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 1), 1).getValues();
+            for (let i = 0; i < data.length; i++) {
+                if (data[i][0] === actionData.task_id) {
+                    const row = i + 2;
+                    const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+                    sheet.getRange(row, 6).setValue(true);   // Slack_Notified
+                    sheet.getRange(row, 7).setValue(now);    // Slack_Notified_At
+                    break;
+                }
+            }
+        }
+
+        return { status: 'ok' };
+    } catch (error) {
+        return { status: 'error', message: error.message };
+    }
+}
+
+/**
+ * 手動測試入口：confirmWrite 流程（可在 GAS 編輯器直接執行）
  */
 function testDispatcher() {
-    // 動態產生「7 天後」的日期，避免測試行程被埋在過去
+    // 動態產生「7 天後」的日期
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 7);
     const dueDateStr = Utilities.formatDate(futureDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
 
     const testPayload = {
         "intents": ["CREATE_ENTITY", "UPDATE_PIPELINE", "LOG_INTERACTION", "SCHEDULE_ACTION"],
+        "overall_confidence": 0.90,
+        "missing_fields": [],
         "entities": [
-            { "name": "瑞昱半導體", "category": "Client", "industry": "IC 設計" }
+            { "name": "瑞昱半導體", "category": "Client", "industry": "IC 設計", "matched_entity_id": null, "entity_match_confidence": 0 }
         ],
         "pipelines": [
             {
                 "entity_name": "瑞昱半導體",
                 "stage": "規格",
                 "est_value": 3000000,
-                "next_action_date": "2025-04-11",
+                "next_action_date": dueDateStr,
                 "status_summary": "採購副總對 AI 質檢方案感興趣，內部評估預算中"
             }
         ],
@@ -119,139 +162,73 @@ function testDispatcher() {
                 "sentiment": "Positive"
             }
         ],
-        "tasks": [
+        "actions": [
             {
-                "ref_entity": "瑞昱半導體",
-                "task_detail": "前往瑞昱半導體進行正式技術簡報",
-                "due_date": dueDateStr
+                "entity_name": "瑞昱半導體",
+                "action_description": "前往瑞昱半導體進行正式技術簡報",
+                "action_date": dueDateStr
             }
-        ]
+        ],
+        "edit_log": []
     };
 
-    const result = processPayload(testPayload);
+    Logger.log('=== testDispatcher (confirmWrite) 開始 ===');
+    const result = confirmWrite(testPayload);
     Logger.log(JSON.stringify(result, null, 2));
+    Logger.log('=== testDispatcher 結束 ===');
 }
 
 /**
- * 獨立 Calendar 診斷函式
- * 直接執行此函式副這個，不經過任何 Sheets 邏輯，確認 Calendar 权限與設定正確
+ * 手動測試 confirmWrite 並驗證 Slack 通知
  */
-function testCalendar() {
-    Logger.log('=== Calendar 診斷開始 ===');
-
-    // Step 1: 取得預設日曆
-    try {
-        const calendar = CalendarApp.getDefaultCalendar();
-        Logger.log('日曆名稱: ' + calendar.getName());
-        Logger.log('日曆 ID: ' + calendar.getId());
-    } catch (e) {
-        Logger.log('[失敗] 無法取得日曆: ' + e.message);
-        return;
-    }
-
-    // Step 2: 建立測試行程（使用「今天」避免日期問題）
-    try {
-        const calendar = CalendarApp.getDefaultCalendar();
-        const today = new Date();
-
-        Logger.log('將建立行程，日期: ' + Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-
-        const event = calendar.createAllDayEvent('[CRM TEST] 日曆診斷事件', today, {
-            description: '此為診斷事件，可安全刪除'
-        });
-
-        Logger.log('行程建立成功! ID: ' + event.getId());
-        Logger.log('行程標題: ' + event.getTitle());
-
-        // 產生連結
-        const calId = Session.getActiveUser().getEmail();
-        const link = 'https://calendar.google.com/calendar/event?eid=' +
-            Utilities.base64EncodeWebSafe(event.getId() + ' ' + calId).replace(/=/g, '');
-        Logger.log('GCal Link: ' + link);
-
-    } catch (e) {
-        Logger.log('[失敗] 建立行程失敗: ' + e.message);
-    }
-
-    Logger.log('=== Calendar 診斷結束 ===');
+function testConfirmWrite() {
+    testDispatcher();
 }
 
+
 // ============================================================
-// 結果摘要生成器（供前端 UI 顯示）
+// 核心路由引擎（內部）
 // ============================================================
 
 /**
- * 將 processPayload 的原始結果轉換為小木简潔格式
- * @param {Object} result    - processPayload 回傳的原始結果
- * @param {Object} parsed    - Gemini NLU 回傳的 JSON
- * @returns {Object} summary - 前端用简潔數據
+ * 根據 intents 分派至對應的 Handler，回傳寫入結果與 Slack 狀態
+ * @param {Object} confirmedData - 使用者確認後的 NLU JSON（含 edit_log）
+ * @returns {Object} { written, slackFailed, slackError }
  */
-function buildSummary(result, parsed) {
-    const entities = result.entities_created || [];
-    const pipelines = result.pipelines_updated || [];
-    const interactions = result.interactions_logged || [];
-    const tasks = result.tasks_scheduled || [];
-
-    // Calendar 行程明細（對應的 parsed task 資料）
-    const calendarEvents = tasks
-        .filter(t => t.gcal_link && !t.gcal_link.startsWith('ERROR'))
-        .map(t => {
-            // 找對應的原始 task 資料（取得 task_detail 與 due_date）
-            const origTask = (parsed.tasks || []).find(pt => pt.ref_entity === t.ref_entity) || {};
-            return {
-                entity: t.ref_entity,
-                detail: origTask.task_detail || t.task_id,
-                date: origTask.due_date || '',
-                link: t.gcal_link
-            };
-        });
-
-    return {
-        entities_created: entities.filter(e => e.action === 'CREATED').length,
-        entities_skipped: entities.filter(e => e.action === 'SKIPPED').length,
-        pipelines_created: pipelines.filter(p => p.action === 'CREATED').length,
-        pipelines_updated: pipelines.filter(p => p.action === 'UPDATED').length,
-        interactions: interactions.length,
-        tasks: tasks.length,
-        calendar_events: calendarEvents
-    };
-}
-
-// ============================================================
-// 核心路由引擎
-// ============================================================
-
-/**
- * 根據 intents 分派至對應的 Handler
- * @param {Object} payload - NLU 輸出的完整 JSON
- * @returns {Object} 各 handler 的執行結果
- */
-function processPayload(payload) {
-    const intents = payload.intents || [];
-    const result = {
+function processPayload_(confirmedData) {
+    const intents = confirmedData.intents || [];
+    const editLog = confirmedData.edit_log || [];
+    const written = {
         entities_created: [],
         pipelines_updated: [],
         interactions_logged: [],
-        tasks_scheduled: []
+        actions_scheduled: []
     };
+    let slackFailed = false;
+    let slackError = null;
 
     if (intents.includes('CREATE_ENTITY')) {
-        result.entities_created = handleCreateEntities(payload.entities || []);
+        written.entities_created = handleCreateEntities_(confirmedData.entities || []);
     }
 
     if (intents.includes('UPDATE_PIPELINE')) {
-        result.pipelines_updated = handleUpdatePipelines(payload.pipelines || []);
+        written.pipelines_updated = handleUpdatePipelines_(confirmedData.pipelines || []);
     }
 
     if (intents.includes('LOG_INTERACTION')) {
-        result.interactions_logged = handleLogInteractions(payload.interactions || []);
+        written.interactions_logged = handleLogInteractions_(confirmedData.interactions || [], editLog);
     }
 
     if (intents.includes('SCHEDULE_ACTION')) {
-        result.tasks_scheduled = handleScheduleActions(payload.tasks || []);
+        const scheduleResult = handleScheduleActions_(confirmedData.actions || []);
+        written.actions_scheduled = scheduleResult.results;
+        if (scheduleResult.slackFailed) {
+            slackFailed = true;
+            slackError = scheduleResult.slackError;
+        }
     }
 
-    return result;
+    return { written, slackFailed, slackError };
 }
 
 // ============================================================
@@ -262,7 +239,7 @@ function processPayload(payload) {
  * 建立新客戶/夥伴
  * 若名稱已存在（Fuzzy Match），跳過建立並回傳提示
  */
-function handleCreateEntities(entities) {
+function handleCreateEntities_(entities) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('Entity_Index');
     const results = [];
@@ -309,7 +286,7 @@ function handleCreateEntities(entities) {
  * 更新案件進度（若不存在則新建）
  * 使用 Fuzzy Match 找到正確的 Entity Name
  */
-function handleUpdatePipelines(pipelines) {
+function handleUpdatePipelines_(pipelines) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('Strategic_Pipeline');
     const results = [];
@@ -321,7 +298,7 @@ function handleUpdatePipelines(pipelines) {
         // 2. [優化] 若 Entity 不存在，則自動建立 (Proactive Discovery)
         if (!resolvedName) {
             Logger.log('[Dispatcher] 偵測到新 Entity: ' + pipeline.entity_name + '，自動建立中...');
-            handleCreateEntities([{ name: pipeline.entity_name, category: 'Client' }]);
+            handleCreateEntities_([{ name: pipeline.entity_name, category: 'Client' }]);
             resolvedName = pipeline.entity_name;
         }
 
@@ -375,19 +352,22 @@ function handleUpdatePipelines(pipelines) {
 // ============================================================
 
 /**
- * 記錄互動日誌
+ * 記錄互動日誌，第 8 欄寫入 Edit_Log JSON 字串
+ * @param {Array} interactions - 互動陣列
+ * @param {Array} editLog      - 使用者在 EDITING 狀態的修改記錄
  */
-function handleLogInteractions(interactions) {
+function handleLogInteractions_(interactions, editLog) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('Interaction_Timeline');
     const results = [];
+    const editLogStr = (editLog && editLog.length > 0) ? JSON.stringify(editLog) : '';
 
     interactions.forEach(interaction => {
         let resolvedName = fuzzyMatchEntity(interaction.entity_name);
 
         // [優化] 自動補齊 Entity
         if (!resolvedName) {
-            handleCreateEntities([{ name: interaction.entity_name, category: 'Client' }]);
+            handleCreateEntities_([{ name: interaction.entity_name, category: 'Client' }]);
             resolvedName = interaction.entity_name;
         }
 
@@ -399,6 +379,7 @@ function handleLogInteractions(interactions) {
             .map(point => '• ' + point)
             .join('\n');
 
+        // 第 8 欄（Edit_Log）寫入 JSON 字串
         sheet.appendRow([
             newId,
             now,
@@ -406,7 +387,8 @@ function handleLogInteractions(interactions) {
             interaction.raw_transcript || '',
             insights,
             interaction.sentiment || 'Neutral',
-            'System' // Reporter
+            'System',   // Reporter
+            editLogStr  // Edit_Log（col 8）
         ]);
 
         results.push({
@@ -424,77 +406,71 @@ function handleLogInteractions(interactions) {
 // ============================================================
 
 /**
- * 建立 Google Calendar 行程，並將連結回填至 Action_Backlog
+ * 寫入 Action_Backlog（新欄位：Slack_Notified/Slack_Notified_At/Status），
+ * 並呼叫 sendConfirmation() 發送 Slack 通知
+ * @param {Array} actions - actions 陣列（新格式：entity_name、action_description、action_date）
+ * @returns {Object} { results, slackFailed, slackError }
  */
-function handleScheduleActions(tasks) {
+function handleScheduleActions_(actions) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('Action_Backlog');
     const results = [];
+    let slackFailed = false;
+    let slackError = null;
 
-    tasks.forEach(task => {
-        let resolvedName = fuzzyMatchEntity(task.ref_entity);
+    actions.forEach(action => {
+        let resolvedName = fuzzyMatchEntity(action.entity_name);
 
         // [優化] 自動補齊 Entity
         if (!resolvedName) {
-            handleCreateEntities([{ name: task.ref_entity, category: 'Client' }]);
-            resolvedName = task.ref_entity;
+            handleCreateEntities_([{ name: action.entity_name, category: 'Client' }]);
+            resolvedName = action.entity_name;
         }
 
         const newId = getNextTaskId();
 
-        // --- 建立 Google Calendar 全天行程 ---
-        let gcalLink = '';
-        try {
-            Logger.log('[Calendar] 開始建立行程，對象: ' + resolvedName);
-
-            const calendar = CalendarApp.getDefaultCalendar();
-            Logger.log('[Calendar] 日曆: ' + calendar.getName());
-
-            const parts = task.due_date.split('-');
-            const dueDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-            Logger.log('[Calendar] 行程日期: ' + Utilities.formatDate(dueDate, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-
-            const eventTitle = '[CRM] ' + resolvedName + ' — ' + task.task_detail;
-            Logger.log('[Calendar] 行程標題: ' + eventTitle);
-
-            const event = calendar.createAllDayEvent(eventTitle, dueDate, {
-                description: '由 Conversational CRM 自動建立\n\n'
-                    + '客戶/夥伴：' + resolvedName + '\n'
-                    + '任務：' + task.task_detail
-            });
-            Logger.log('[Calendar] 行程建立成功! ID: ' + event.getId());
-
-            const rawId = event.getId();
-            const calId = Session.getActiveUser().getEmail();
-            gcalLink = 'https://calendar.google.com/calendar/event?eid=' +
-                Utilities.base64EncodeWebSafe(rawId + ' ' + calId).replace(/=/g, '');
-            Logger.log('[Calendar] GCal Link: ' + gcalLink);
-
-        } catch (calError) {
-            Logger.log('[Calendar] 建立失敗! 錯誤: ' + calError.message);
-            Logger.log('[Calendar] Stack: ' + calError.stack);
-            gcalLink = 'ERROR: ' + calError.message;
-        }
-
-        // --- 寫入 Action_Backlog ---
+        // --- 寫入 Action_Backlog（新 Schema：8 欄，無 GCal_Link）---
         sheet.appendRow([
             newId,
             resolvedName,
-            task.task_detail,
-            task.due_date,
-            gcalLink,
-            'System' // Reporter
+            action.action_description || '',
+            action.action_date || '',
+            'System',  // Reporter
+            false,     // Slack_Notified（col 6）
+            '',        // Slack_Notified_At（col 7）
+            'pending'  // Status（col 8）
         ]);
 
+        // --- 呼叫 Slack 通知 ---
+        const actionData = {
+            task_id: newId,
+            entity_name: resolvedName,
+            action_description: action.action_description || '',
+            action_date: action.action_date || ''
+        };
+        const slackResult = sendConfirmation(actionData);
+
+        if (slackResult.success) {
+            // 更新 Slack_Notified=true、Slack_Notified_At
+            const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+            const lastRow = sheet.getLastRow();
+            sheet.getRange(lastRow, 6).setValue(true);
+            sheet.getRange(lastRow, 7).setValue(now);
+        } else {
+            Logger.log('[Slack] 通知失敗（task_id: ' + newId + '）: ' + slackResult.error);
+            slackFailed = true;
+            slackError = slackResult.error;
+        }
+
         results.push({
-            ref_entity: resolvedName,
+            entity_name: resolvedName,
             action: 'SCHEDULED',
             task_id: newId,
-            gcal_link: gcalLink
+            slack_sent: slackResult.success
         });
     });
 
-    return results;
+    return { results, slackFailed, slackError };
 }
 
 // ============================================================

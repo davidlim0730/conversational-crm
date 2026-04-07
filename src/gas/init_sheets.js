@@ -20,8 +20,8 @@
 const SCHEMA = [
   {
     name: 'Entity_Index',
-    headers: ['Entity_ID', 'Name', 'Category', 'Industry', 'Created_At'],
-    columnWidths: [100, 180, 100, 150, 130],
+    headers: ['Entity_ID', 'Name', 'Category', 'Industry', 'Created_At', 'Reporter'],
+    columnWidths: [100, 180, 100, 150, 130, 120],
     validations: [
       { col: 3, values: ['Client', 'Partner'] }   // Category
     ],
@@ -31,8 +31,8 @@ const SCHEMA = [
   },
   {
     name: 'Strategic_Pipeline',
-    headers: ['Project_ID', 'Entity_Name', 'Stage', 'Est_Value', 'Next_Action_Date', 'Status_Summary'],
-    columnWidths: [130, 180, 100, 120, 140, 300],
+    headers: ['Project_ID', 'Entity_Name', 'Stage', 'Est_Value', 'Next_Action_Date', 'Status_Summary', 'Owner'],
+    columnWidths: [130, 180, 100, 120, 140, 300, 120],
     validations: [
       { col: 3, values: ['尋商', '規格', '提案', '商議', '贏單', '輸單', '暫緩'] }  // Stage
     ],
@@ -43,8 +43,9 @@ const SCHEMA = [
   },
   {
     name: 'Interaction_Timeline',
-    headers: ['Log_ID', 'Timestamp', 'Entity_Name', 'Raw_Transcript', 'AI_Key_Insights', 'Sentiment'],
-    columnWidths: [100, 160, 180, 400, 300, 100],
+    // 第 8 欄 Edit_Log 存 JSON 字串，記錄使用者在 EDITING 狀態中修改的欄位
+    headers: ['Log_ID', 'Timestamp', 'Entity_Name', 'Raw_Transcript', 'AI_Key_Insights', 'Sentiment', 'Reporter', 'Edit_Log'],
+    columnWidths: [100, 160, 180, 400, 300, 100, 120, 200],
     validations: [
       { col: 6, values: ['Positive', 'Neutral', 'Negative'] }  // Sentiment
     ],
@@ -54,11 +55,15 @@ const SCHEMA = [
   },
   {
     name: 'Action_Backlog',
-    headers: ['Task_ID', 'Ref_Entity', 'Task_Detail', 'Due_Date', 'GCal_Link'],
-    columnWidths: [100, 180, 300, 130, 300],
-    validations: [],
+    // 移除 GCal_Link；新增 Slack_Notified(6)、Slack_Notified_At(7)、Status(8)
+    headers: ['Task_ID', 'Ref_Entity', 'Task_Detail', 'Due_Date', 'Reporter', 'Slack_Notified', 'Slack_Notified_At', 'Status'],
+    columnWidths: [100, 180, 300, 130, 120, 120, 160, 100],
+    validations: [
+      { col: 8, values: ['pending', 'completed'] }  // Status
+    ],
     formats: [
-      { col: 4, format: 'yyyy-MM-dd' }            // Due_Date
+      { col: 4, format: 'yyyy-MM-dd' },            // Due_Date
+      { col: 7, format: 'yyyy-MM-dd HH:mm:ss' }   // Slack_Notified_At
     ]
   }
 ];
