@@ -72,6 +72,26 @@ const SCHEMA = [
 // 主函式：初始化所有表格
 // ============================================================
 
+/**
+ * 從 GAS 編輯器直接執行用（跳過 UI 對話框）
+ * 強制重新初始化四張表，結果輸出至執行日誌
+ */
+function initSheetStructureForce() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  SCHEMA.forEach(table => {
+    const sheet = getOrCreateSheet_(ss, table.name);
+    setupHeaders_(sheet, table.headers);
+    setupColumnWidths_(sheet, table.columnWidths);
+    setupValidations_(sheet, table.validations);
+    setupFormats_(sheet, table.formats);
+    console.log('✅ ' + table.name + ' 初始化完成');
+  });
+
+  removeDefaultSheet_(ss);
+  console.log('✅ 四張核心表初始化完成：Entity_Index、Strategic_Pipeline、Interaction_Timeline、Action_Backlog');
+}
+
 function initSheetStructure() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const ui = SpreadsheetApp.getUi();
