@@ -480,3 +480,117 @@ function handleCreateEntities_(entities) {
 
   return results;
 }
+
+// ============================================================
+// Handler: UPDATE_PIPELINE
+// ============================================================
+
+/**
+ * 將階段變更寫入 Stage_Changed_Events（自動，禁止手動刪除）
+ */
+function logStageChangeEvent_(dealId, fromStage, toStage, reason) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Stage_Changed_Events');
+  if (!sheet) return;
+  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+  const newId = getNextEventId();
+  // 欄位順序：Event_ID, Deal_ID, From_Stage, To_Stage, Change_Reason, Updated_By, Timestamp
+  sheet.appendRow([newId, dealId, fromStage, toStage, reason || 'AI 自動更新', 'System', now]);
+}
+
+/**
+ * 更新成交矩陣（若不存在則新建）
+ * - Fuzzy Match → Customer_ID
+ * - is_pending 覆蓋任意 Stage（Boolean）
+ * - Stage 變更時自動寫入 Stage_Changed_Events
+ */
+function handleUpdatePipelines_(pipelines) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const dealSheet = ss.getSheetByName('Deal_Matrix');
+  const results = [];
+
+  pipelines.forEach(function(pipeline) {
+    // 1. Resolve customer
+    let resolvedName = fuzzyMatchEntity(pipeline.entity_name);
+    if (!resolvedName) {
+      handleCreateEntities_([{ name: pipeline.entity_name, category: 'Client' }]);
+      resolvedName = pipeline.entity_name;
+    }
+    const customerId = getCustomerIdByName_(resolvedName);
+
+    // 2. Resolve product
+    const productId = getProductIdByName_(pipeline.product_id || null);
+
+    // 3. Find existing deal (by Customer_ID, 選擇性比對 Product_ID)
+    const existing = findDealRow_(dealSheet, customerId, productId || pipeline.product_id || null);
+
+    if (existing) {
+      // 取得舊 Stage（col 6）
+      const oldStage = dealSheet.getRange(existing.row, 6).getValue();
+
+      const updateData = { Last_Updated_By: 'System' };
+      if (pipeline.stage !== undefined && pipeline.stage !== null) updateData.Stage = pipeline.stage;
+      if (pipeline.is_pending !== undefined) updateData.is_pending = pipeline.is_pending ? true : false;
+      if (pipeline.est_value !== null && pipeline.est_value !== undefined) updateData.Est_Value = pipeline.est_value;
+      if (pipeline.next_action_date) updateData.Next_Follow_Up = pipeline.next_action_date;
+      if (pipeline.status_summary) updateData.Status_Summary = pipeline.status_summary;
+      if (productId) updateData.Product_ID = productId;
+
+      updateRow_('Deal_Matrix', 'Deal_ID', existing.id, updateData);
+
+      // 若 Stage 有變更，記錄事件軌跡
+      if (pipeline.stage && String(pipeline.stage) !== String(oldStage)) {
+        logStageChangeEvent_(existing.id, oldStage, pipeline.stage, 'AI 解析業務回報自動更新');
+      }
+
+      results.push({ entity_name: resolvedName, action: 'UPDATED', deal_id: existing.id });
+    } else {
+      // 新建 Deal
+      const newId = getNextDealId();
+      // 欄位順序：Deal_ID, Customer_ID, Product_ID, Partner_ID, Partner_Role, Stage, is_pending, Est_Value, Deal_Value, Next_Follow_Up, Status_Summary, Owner, Last_Updated_By
+      dealSheet.appendRow([
+        newId,
+        customerId || resolvedName,
+        productId || pipeline.product_id || '',
+        '',  // Partner_ID
+        '',  // Partner_Role
+        pipeline.stage || '0',
+        pipeline.is_pending ? true : false,
+        pipeline.est_value || '',
+        '',  // Deal_Value（成交後才填）
+        pipeline.next_action_date || '',
+        pipeline.status_summary || '',
+        '',  // Owner
+        'System'
+      ]);
+      logStageChangeEvent_(newId, '(新建)', pipeline.stage || '0', '新案件建立');
+      results.push({ entity_name: resolvedName, action: 'CREATED', deal_id: newId });
+    }
+  });
+
+  return results;
+}
+
+/**
+ * Dashboard 手動更新 Deal Stage（HITL）
+ */
+function updateDealStage_(dealId, newStage, reason, updatedBy) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Deal_Matrix');
+  if (!sheet || sheet.getLastRow() <= 1) return { error: 'Deal_Matrix 為空' };
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const stageCol = headers.indexOf('Stage') + 1;
+  const idCol = headers.indexOf('Deal_ID');
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][idCol] === dealId) {
+      const oldStage = data[i][stageCol - 1];
+      updateRow_('Deal_Matrix', 'Deal_ID', dealId, { Stage: newStage, Last_Updated_By: updatedBy });
+      logStageChangeEvent_(dealId, oldStage, newStage, reason || 'Dashboard 手動更新');
+      return { dealId: dealId, oldStage: oldStage, newStage: newStage, action: 'UPDATED' };
+    }
+  }
+  return { error: 'Deal not found: ' + dealId };
+}
