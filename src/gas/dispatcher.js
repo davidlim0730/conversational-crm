@@ -751,3 +751,81 @@ function logEvalFeedback_(data) {
 
   return { id: newId };
 }
+
+// ============================================================
+// 手動測試入口（在 GAS 編輯器執行，測試完可刪除）
+// ============================================================
+
+/**
+ * 端對端整合測試：模擬完整的 confirmWrite 流程
+ * 執行後請手動確認以下表格均有新資料：
+ *   - Customers（或顯示 SKIPPED）
+ *   - Deal_Matrix（Stage='2'）
+ *   - Stage_Changed_Events（一筆新事件）
+ *   - Interactions（一筆互動）
+ *   - Action_Backlog（一筆任務）
+ */
+function testFullConfirmWrite() {
+  const futureDate = Utilities.formatDate(
+    new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
+    Session.getScriptTimeZone(), 'yyyy-MM-dd'
+  );
+
+  const testPayload = {
+    intents: ['CREATE_ENTITY', 'UPDATE_PIPELINE', 'LOG_INTERACTION', 'SCHEDULE_ACTION'],
+    overall_confidence: 0.90,
+    missing_fields: [],
+    entities: [
+      { name: '整合測試科技', category: 'Client', industry: 'IT 服務', matched_entity_id: null, entity_match_confidence: 0 }
+    ],
+    pipelines: [
+      {
+        entity_name: '整合測試科技',
+        stage: '2',
+        is_pending: false,
+        product_id: null,
+        est_value: 5000000,
+        next_action_date: futureDate,
+        status_summary: '進入規格確認，預計提案'
+      }
+    ],
+    interactions: [
+      {
+        entity_name: '整合測試科技',
+        raw_transcript: '今天拜訪了整合測試科技，對方採購長表達高度興趣...',
+        ai_key_insights: ['採購長積極', '預算已核准', '需要兩週內提案'],
+        sentiment: 'Positive'
+      }
+    ],
+    actions: [
+      {
+        entity_name: '整合測試科技',
+        task_detail: '準備技術提案簡報並安排簡報時間',
+        due_date: futureDate
+      }
+    ],
+    edit_log: []
+  };
+
+  Logger.log('=== testFullConfirmWrite 開始 ===');
+  const result = confirmWrite_(testPayload);
+  Logger.log(JSON.stringify(result, null, 2));
+  Logger.log('=== testFullConfirmWrite 結束 ===');
+  // 預期 status: 'ok' 或 'partial_success'（Slack 可能失敗）
+  // written.entities_created: [{ action: 'CREATED' }]
+  // written.pipelines_updated: [{ action: 'CREATED', deal_id: 'D-...' }]
+  // written.interactions_logged: [{ action: 'LOGGED', interaction_id: 'INT-...' }]
+  // written.actions_scheduled: [{ action: 'SCHEDULED', task_id: 'T-...' }]
+}
+
+/**
+ * 測試 doGet RESTful API（直接呼叫 helper，驗證格式）
+ */
+function testGetCustomers() {
+  const data = getSheetData_('Customers');
+  Logger.log('Customers 筆數: ' + data.length);
+  if (data.length > 0) {
+    Logger.log('第一筆 keys: ' + Object.keys(data[0]).join(', '));
+    // 預期 keys: Customer_ID, Company_Name, Industry, Key_Contact, Lead_Source, Status, Reporter, Created_At
+  }
+}
