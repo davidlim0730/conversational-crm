@@ -152,3 +152,162 @@ function findDealRow_(dealSheet, customerId, productId) {
   }
   return null;
 }
+
+// ============================================================
+// Web App 入口 — doPost（路由）
+// ============================================================
+
+/**
+ * POST 入口，依 action 路由：
+ *   parseOnly     → 呼叫 NLU，回傳解析 JSON（不寫入）
+ *   confirmWrite  → 接受確認資料，寫入 Sheets + Slack
+ *   retrySlack    → 重試指定任務的 Slack 通知
+ *   logFeedback   → HITL 反饋寫入 Eval_Feedback_Sheet
+ *   updateDealStage → Dashboard 手動更新 Stage
+ *   addCustomer / updateCustomer / deleteCustomer
+ *   addDeal / updateDeal / deleteDeal
+ *   addStakeholder / updateStakeholder / deleteStakeholder
+ */
+function doPost(e) {
+  try {
+    const payload = JSON.parse(e.postData.contents);
+    const action = payload.action;
+
+    if (action === 'parseOnly') {
+      return jsonResponse_(parseOnly_(payload.raw_text));
+    }
+    if (action === 'confirmWrite') {
+      return jsonResponse_(confirmWrite_(payload.confirmedData));
+    }
+    if (action === 'retrySlack') {
+      return jsonResponse_(retrySlack_(payload.actionData));
+    }
+    if (action === 'logFeedback') {
+      return jsonResponse_({ status: 'ok', result: logEvalFeedback_(payload.data) });
+    }
+    if (action === 'updateDealStage') {
+      return jsonResponse_({ status: 'ok', result: updateDealStage_(payload.dealId, payload.newStage, payload.reason || '', payload.updatedBy || 'Dashboard') });
+    }
+    // Customer CRUD
+    if (action === 'addCustomer')    return jsonResponse_({ status: 'ok', result: addRow_('Customers', payload.data, 'Customer_ID', 'C-') });
+    if (action === 'updateCustomer') return jsonResponse_({ status: 'ok', result: updateRow_('Customers', 'Customer_ID', payload.id, payload.data) });
+    if (action === 'deleteCustomer') return jsonResponse_({ status: 'ok', result: deleteRow_('Customers', 'Customer_ID', payload.id) });
+    // Deal CRUD
+    if (action === 'addDeal')    return jsonResponse_({ status: 'ok', result: addRow_('Deal_Matrix', payload.data, 'Deal_ID', 'D-') });
+    if (action === 'updateDeal') return jsonResponse_({ status: 'ok', result: updateRow_('Deal_Matrix', 'Deal_ID', payload.id, payload.data) });
+    if (action === 'deleteDeal') return jsonResponse_({ status: 'ok', result: deleteRow_('Deal_Matrix', 'Deal_ID', payload.id) });
+    // Stakeholder CRUD
+    if (action === 'addStakeholder')    return jsonResponse_({ status: 'ok', result: addRow_('Stakeholders', payload.data, 'Stakeholder_ID', 'S-') });
+    if (action === 'updateStakeholder') return jsonResponse_({ status: 'ok', result: updateRow_('Stakeholders', 'Stakeholder_ID', payload.id, payload.data) });
+    if (action === 'deleteStakeholder') return jsonResponse_({ status: 'ok', result: deleteRow_('Stakeholders', 'Stakeholder_ID', payload.id) });
+
+    return jsonResponse_({ status: 'error', message: 'Unknown action: ' + action });
+  } catch (err) {
+    return jsonResponse_({ status: 'error', message: err.message });
+  }
+}
+
+// ============================================================
+// 兩階段流程核心
+// ============================================================
+
+/**
+ * Phase 1：呼叫 Gemini NLU，回傳解析 JSON（不寫入）
+ * 前端在此收到結果後顯示預覽，使用者確認後再呼叫 confirmWrite_
+ */
+function parseOnly_(rawText) {
+  try {
+    const productNames = getProductLineNames_();
+    const parsed = parseOnly(rawText, productNames);  // 呼叫 gemini_nlu.js
+    return { status: 'ok', parsed: parsed };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+}
+
+/**
+ * Phase 2：接受使用者確認後的 NLU 資料，執行 Sheets 寫入 + Slack 通知
+ * @param {Object} confirmedData - NLU JSON（含 intents、entities 等）+ edit_log
+ * @returns {Object} { status, written, slackSent, slackError? }
+ */
+function confirmWrite_(confirmedData) {
+  try {
+    const result = processPayload_(confirmedData);
+    return {
+      status: result.slackFailed ? 'partial_success' : 'ok',
+      written: result.written,
+      slackSent: !result.slackFailed,
+      slackError: result.slackError || null
+    };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+}
+
+/**
+ * 重試 Slack 通知失敗的任務
+ * @param {Object} actionData - { task_id, entity_name, task_detail, due_date }
+ */
+function retrySlack_(actionData) {
+  try {
+    const slackResult = sendConfirmation(actionData);  // 現有 Slack 函式
+    if (!slackResult.success) {
+      return { status: 'error', message: slackResult.error };
+    }
+    // 更新 Action_Backlog：Slack_Notified=true
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('Action_Backlog');
+    if (sheet && actionData.task_id) {
+      const ids = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 1), 1).getValues();
+      for (let i = 0; i < ids.length; i++) {
+        if (ids[i][0] === actionData.task_id) {
+          const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+          sheet.getRange(i + 2, 6).setValue(true);   // Slack_Notified（col 6）
+          sheet.getRange(i + 2, 7).setValue(now);    // Slack_Notified_At（col 7）
+          break;
+        }
+      }
+    }
+    return { status: 'ok' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+}
+
+// ============================================================
+// 核心路由引擎
+// ============================================================
+
+/**
+ * 依 intents 分派至各 Handler
+ * @returns {Object} { written, slackFailed, slackError }
+ */
+function processPayload_(confirmedData) {
+  const intents = confirmedData.intents || [];
+  const editLog = confirmedData.edit_log || [];
+  const written = {
+    entities_created: [],
+    pipelines_updated: [],
+    interactions_logged: [],
+    actions_scheduled: []
+  };
+  let slackFailed = false;
+  let slackError = null;
+
+  if (intents.includes('CREATE_ENTITY')) {
+    written.entities_created = handleCreateEntities_(confirmedData.entities || []);
+  }
+  if (intents.includes('UPDATE_PIPELINE')) {
+    written.pipelines_updated = handleUpdatePipelines_(confirmedData.pipelines || []);
+  }
+  if (intents.includes('LOG_INTERACTION')) {
+    written.interactions_logged = handleLogInteractions_(confirmedData.interactions || [], editLog);
+  }
+  if (intents.includes('SCHEDULE_ACTION')) {
+    const r = handleScheduleActions_(confirmedData.actions || []);
+    written.actions_scheduled = r.results;
+    if (r.slackFailed) { slackFailed = true; slackError = r.slackError; }
+  }
+
+  return { written, slackFailed, slackError };
+}
