@@ -719,3 +719,35 @@ function handleScheduleActions_(actions) {
 
   return { results, slackFailed, slackError };
 }
+
+// ============================================================
+// HITL — Eval Feedback
+// ============================================================
+
+/**
+ * 將 AI Stage 建議 vs 人工修正記錄至 Eval_Feedback_Sheet
+ * 供 Dashboard 前端在使用者修改 Stage 後呼叫
+ * @param {Object} data - { Interaction_ID, Product_ID, Original_Raw_Note, AI_Suggested_Stage, Human_Corrected_Stage }
+ */
+function logEvalFeedback_(data) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Eval_Feedback_Sheet');
+  if (!sheet) return { error: 'Eval_Feedback_Sheet 不存在' };
+
+  const newId = getNextFeedbackId();
+  const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+
+  // 欄位順序：Feedback_ID, Interaction_ID, Product_ID, Original_Raw_Note,
+  //           AI_Suggested_Stage, Human_Corrected_Stage, Feedback_Timestamp
+  sheet.appendRow([
+    newId,
+    data.Interaction_ID || '',
+    data.Product_ID || '',
+    data.Original_Raw_Note || '',
+    data.AI_Suggested_Stage || '',
+    data.Human_Corrected_Stage || '',
+    now
+  ]);
+
+  return { id: newId };
+}
