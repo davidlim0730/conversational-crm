@@ -650,3 +650,72 @@ function handleLogInteractions_(interactions, editLog) {
 
   return results;
 }
+
+// ============================================================
+// Handler: SCHEDULE_ACTION
+// ============================================================
+
+/**
+ * 寫入 Action_Backlog 並發送 Slack 通知
+ * NLU 輸出欄位：entity_name, task_detail（非舊版 action_description）, due_date（非舊版 action_date）
+ * Action_Backlog 欄位順序：Task_ID, Ref_Entity, Task_Detail, Due_Date,
+ *                          Reporter, Slack_Notified, Slack_Notified_At, Status
+ * @returns {Object} { results, slackFailed, slackError }
+ */
+function handleScheduleActions_(actions) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Action_Backlog');
+  const results = [];
+  let slackFailed = false;
+  let slackError = null;
+
+  actions.forEach(function(action) {
+    let resolvedName = fuzzyMatchEntity(action.entity_name);
+    if (!resolvedName) {
+      handleCreateEntities_([{ name: action.entity_name, category: 'Client' }]);
+      resolvedName = action.entity_name;
+    }
+
+    const newId = getNextTaskId();
+    // 欄位順序：Task_ID, Ref_Entity, Task_Detail, Due_Date, Reporter, Slack_Notified, Slack_Notified_At, Status
+    sheet.appendRow([
+      newId,
+      resolvedName,
+      action.task_detail || '',   // 新欄位名（v2.0 system_prompt）
+      action.due_date || '',      // 新欄位名（v2.0 system_prompt）
+      'System',
+      false,
+      '',
+      'pending'
+    ]);
+
+    // 發送 Slack 通知
+    const actionData = {
+      task_id: newId,
+      entity_name: resolvedName,
+      task_detail: action.task_detail || '',
+      due_date: action.due_date || ''
+    };
+    const slackResult = sendConfirmation(actionData);
+
+    if (slackResult.success) {
+      const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      const lastRow = sheet.getLastRow();
+      sheet.getRange(lastRow, 6).setValue(true);  // Slack_Notified
+      sheet.getRange(lastRow, 7).setValue(now);   // Slack_Notified_At
+    } else {
+      Logger.log('[Slack] 通知失敗 (task_id: ' + newId + '): ' + slackResult.error);
+      slackFailed = true;
+      slackError = slackResult.error;
+    }
+
+    results.push({
+      entity_name: resolvedName,
+      action: 'SCHEDULED',
+      task_id: newId,
+      slack_sent: slackResult.success
+    });
+  });
+
+  return { results, slackFailed, slackError };
+}
