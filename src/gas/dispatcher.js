@@ -390,3 +390,42 @@ function generateNextId_(sheet, prefix) {
   const next = (parseInt(numPart, 10) || 0) + 1;
   return prefix + next.toString().padStart(4, '0');
 }
+
+// ============================================================
+// Fuzzy Matching 引擎（搜尋 Customers.Company_Name）
+// ============================================================
+
+/**
+ * 在 Customers 表以 Containment Matching 搜尋公司名稱
+ * 策略：精確匹配（不分大小寫）→ 包含匹配（閾值 ≥ 0.5）
+ * @param {string} inputName - NLU 解析出的公司名
+ * @returns {string|null} 正式公司名，或 null（未找到）
+ */
+function fuzzyMatchEntity(inputName) {
+  if (!inputName) return null;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Customers');
+  if (!sheet || sheet.getLastRow() <= 1) return null;
+
+  // Company_Name 在第 2 欄
+  const names = sheet.getRange(2, 2, sheet.getLastRow() - 1, 1).getValues().flat();
+  const norm = inputName.trim().toLowerCase();
+
+  // 1. 精確匹配
+  for (const name of names) {
+    if (typeof name === 'string' && name.toLowerCase() === norm) return name;
+  }
+
+  // 2. 包含匹配
+  let bestMatch = null;
+  let bestScore = 0;
+  for (const name of names) {
+    if (typeof name !== 'string' || !name) continue;
+    const db = name.toLowerCase();
+    if (db.includes(norm) || norm.includes(db)) {
+      const score = Math.min(norm.length, db.length) / Math.max(norm.length, db.length);
+      if (score > bestScore) { bestScore = score; bestMatch = name; }
+    }
+  }
+  return (bestMatch && bestScore >= 0.5) ? bestMatch : null;
+}
