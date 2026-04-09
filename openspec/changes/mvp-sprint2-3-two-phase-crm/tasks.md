@@ -28,7 +28,7 @@
 - [x] 4.4 實作 `sendConfirmation(actionData)` 公開函式：取得 User ID → 建構 blocks → postMessage → 回傳成功/失敗狀態
 - [x] 4.5 實作 `buildReminderBlocks_(actionItems, mode, dateRangeLabel)` 函式
 - [x] 4.6 實作 `sendReminder(actionItems, mode, dateRangeLabel)` 公開函式
-- [ ] 4.7 在 GAS Script Properties 設定 `SLACK_BOT_TOKEN`、`USER_EMAIL`，執行 `testSlackNotifier()` 確認 DM 送達
+- [x] 4.7 在 GAS Script Properties 設定 `SLACK_BOT_TOKEN`、`USER_EMAIL`，執行 `testSlackNotifier()` 確認 DM 送達
 
 ## 5. dispatcher.js 更新
 
@@ -46,7 +46,7 @@
 - [x] 6.3 實作 `getDateRange_(mode)` 函式：mode='friday' 回傳下週 Mon-Sun 範圍；mode='monday' 回傳本週 Mon-Sun 範圍
 - [x] 6.4 實作 `fetchPendingActions_(startDate, endDate)` 函式：從 Action_Backlog 批次讀取（上限 50 列）Status=pending 且 Due_Date 在範圍內的記錄
 - [x] 6.5 實作 `sendFridayPreview()` 和 `sendMondayConfirm()` 函式，呼叫 `sendReminder()`
-- [ ] 6.6 在 GAS 編輯器執行 `setupWeeklyTriggers()`，確認 Triggers 清單有兩個新觸發器
+- [x] 6.6 在 GAS 編輯器執行 `setupWeeklyTriggers()`，確認 Triggers 清單有兩個新觸發器
 
 ## 7. frontend.html SPA 狀態機重構
 
@@ -59,12 +59,18 @@
 - [x] 7.7 實作 CONFIRMING 面板：呼叫 `confirmWrite(confirmedData)`（含 edit_log）
 - [x] 7.8 實作 RESULT 面板：顯示成功訊息；`partial_success` 時顯示「重試通知」按鈕（呼叫 `retrySlack()`）
 - [x] 7.9 實作 ERROR 面板：顯示錯誤訊息 + 「重試」按鈕 + 「返回輸入」按鈕
-- [ ] 7.10 端對端測試：在瀏覽器完整走過 INPUT→PREVIEW→EDITING→CONFIRMING→RESULT 流程，確認 Sheets 資料與 Slack 通知正確
+- [x] 7.10 端對端測試：在瀏覽器完整走過 INPUT→PREVIEW→EDITING→CONFIRMING→RESULT 流程，確認 Sheets 資料與 Slack 通知正確
 
 ## 8. 部署與收尾
 
 - [x] 8.1 更新 `src/gas/appsscript.json`：移除 Google Calendar OAuth scope，確認 Sheets 與 UrlFetch scopes 存在
-- [ ] 8.2 執行 `clasp push` 部署所有檔案至 GAS
-- [ ] 8.3 在 GAS 部署介面建立新版本 Web App（版本號遞增，存取權限：任何人）
-- [ ] 8.4 執行 `setupWeeklyTriggers()` 設定每週提醒觸發器
-- [ ] 8.5 進行使用者驗收測試（UAT）：小王使用真實輸入文字完整走過流程
+- [x] 8.2 執行 `clasp push` 部署所有檔案至 GAS
+- [x] 8.3 在 GAS 部署介面建立新版本 Web App（版本號遞增，存取權限：任何人）
+- [x] 8.4 執行 `setupWeeklyTriggers()` 設定每週提醒觸發器
+- [x] 8.5 進行使用者驗收測試（UAT）：主幹流程（INPUT→PREVIEW→CONFIRMING→RESULT）驗證通過
+
+## 9. Post-UAT Open Items（下一個 Sprint）
+
+- [ ] 9.1 **Preview UI 調整**：使用者反饋 Preview 畫面顯示細節需優化（具體項目待下次 session 確認）
+- [ ] 9.2 **Entity Grounding 強化**：同一家客戶在下次輸入時，有機率未被辨認為同一 Entity 導致重複建立，需改進 matched_entity_id 匹配邏輯
+- [ ] 9.3 **Strategic Pipeline 寫入規則**：AI 判斷何時更新現有 Pipeline vs 新建一筆的規則尚不精準，需定義明確的 merge/create 決策邏輯後再驗證

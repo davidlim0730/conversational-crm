@@ -15,56 +15,120 @@
 
 // ============================================================
 // 表格定義 (Schema Config)
+// 版本：v2.0 — 2026-04-08
+// 合併自：舊版主 CRM + Satellite Sales OS v2
+// 共 9 張表，詳細欄位定義見 product-owner-management/MERGED_SCHEMA.md
 // ============================================================
 
 const SCHEMA = [
+  // 1. 客戶表（原 Entity_Index Category=Client）
   {
-    name: 'Entity_Index',
-    headers: ['Entity_ID', 'Name', 'Category', 'Industry', 'Created_At', 'Reporter'],
-    columnWidths: [100, 180, 100, 150, 130, 120],
+    name: 'Customers',
+    headers: ['Customer_ID', 'Company_Name', 'Industry', 'Key_Contact', 'Lead_Source', 'Status', 'Reporter', 'Created_At'],
+    columnWidths: [100, 200, 150, 150, 150, 100, 120, 130],
     validations: [
-      { col: 3, values: ['Client', 'Partner'] }   // Category
+      { col: 6, values: ['Prospect', 'Active', 'Churned'] }  // Status
     ],
     formats: [
-      { col: 5, format: 'yyyy-MM-dd' }            // Created_At
+      { col: 8, format: 'yyyy-MM-dd' }  // Created_At
     ]
   },
+  // 2. 合作夥伴表（原 Entity_Index Category=Partner）
   {
-    name: 'Strategic_Pipeline',
-    headers: ['Project_ID', 'Entity_Name', 'Stage', 'Est_Value', 'Next_Action_Date', 'Status_Summary', 'Owner'],
-    columnWidths: [130, 180, 100, 120, 140, 300, 120],
+    name: 'Partners_Sheet',
+    headers: ['Partner_ID', 'Partner_Name', 'Partner_Type', 'Tier', 'Status', 'Reporter', 'Created_At'],
+    columnWidths: [100, 200, 100, 100, 100, 120, 130],
     validations: [
-      { col: 3, values: ['尋商', '規格', '提案', '商議', '贏單', '輸單', '暫緩'] }  // Stage
+      { col: 3, values: ['SI', 'Agency', 'Tech'] },              // Partner_Type
+      { col: 5, values: ['Active', 'Inactive'] }                  // Status
     ],
     formats: [
-      { col: 4, format: '#,##0' },                // Est_Value
-      { col: 5, format: 'yyyy-MM-dd' }            // Next_Action_Date
+      { col: 7, format: 'yyyy-MM-dd' }  // Created_At
     ]
   },
+  // 3. 交易矩陣表（原 Strategic_Pipeline，Stage 改為數字）
   {
-    name: 'Interaction_Timeline',
-    // 第 8 欄 Edit_Log 存 JSON 字串，記錄使用者在 EDITING 狀態中修改的欄位
-    headers: ['Log_ID', 'Timestamp', 'Entity_Name', 'Raw_Transcript', 'AI_Key_Insights', 'Sentiment', 'Reporter', 'Edit_Log'],
-    columnWidths: [100, 160, 180, 400, 300, 100, 120, 200],
+    name: 'Deal_Matrix',
+    headers: ['Deal_ID', 'Customer_ID', 'Product_ID', 'Partner_ID', 'Partner_Role', 'Stage', 'is_pending', 'Est_Value', 'Deal_Value', 'Next_Follow_Up', 'Status_Summary', 'Owner', 'Last_Updated_By'],
+    columnWidths: [130, 100, 100, 100, 120, 80, 90, 120, 120, 130, 300, 120, 150],
     validations: [
-      { col: 6, values: ['Positive', 'Neutral', 'Negative'] }  // Sentiment
+      { col: 6, values: ['0', '1', '2', '3', '4', '5', '6', '成交', '失敗'] },  // Stage
+      { col: 7, values: ['TRUE', 'FALSE'] }                                        // is_pending
+    ],
+    formats: [
+      { col: 8, format: '#,##0' },               // Est_Value
+      { col: 9, format: '#,##0' },               // Deal_Value
+      { col: 10, format: 'yyyy-MM-dd' }          // Next_Follow_Up
+    ]
+  },
+  // 4. 業務互動紀錄表（原 Interaction_Timeline，欄位取聯集）
+  {
+    name: 'Interactions',
+    headers: ['Interaction_ID', 'Timestamp', 'Sales_Rep', 'Customer_ID', 'Product_ID', 'Partner_ID', 'Raw_Notes', 'AI_Key_Insights', 'Extracted_Intent', 'Sentiment', 'Is_Human_Corrected', 'Edit_Log'],
+    columnWidths: [120, 160, 120, 100, 100, 100, 400, 300, 200, 100, 130, 200],
+    validations: [
+      { col: 10, values: ['Positive', 'Neutral', 'Negative'] },  // Sentiment
+      { col: 11, values: ['TRUE', 'FALSE'] }                       // Is_Human_Corrected
     ],
     formats: [
       { col: 2, format: 'yyyy-MM-dd HH:mm:ss' }  // Timestamp
     ]
   },
+  // 5. 利害關係人表（新版帶入）
+  {
+    name: 'Stakeholders',
+    headers: ['Stakeholder_ID', 'Customer_ID', 'Name', 'Role', 'Attitude', 'Last_Contact_Date'],
+    columnWidths: [120, 100, 150, 130, 120, 140],
+    validations: [
+      { col: 4, values: ['Champion', 'Decision Maker', 'User', 'Gatekeeper'] },  // Role
+      { col: 5, values: ['Supportive', 'Neutral', 'Opposed'] }                    // Attitude
+    ],
+    formats: [
+      { col: 6, format: 'yyyy-MM-dd' }  // Last_Contact_Date
+    ]
+  },
+  // 6. 階段變更事件表（新版帶入，自動寫入，禁止手動刪除）
+  {
+    name: 'Stage_Changed_Events',
+    headers: ['Event_ID', 'Deal_ID', 'From_Stage', 'To_Stage', 'Change_Reason', 'Updated_By', 'Timestamp'],
+    columnWidths: [120, 130, 100, 100, 300, 150, 160],
+    validations: [],
+    formats: [
+      { col: 7, format: 'yyyy-MM-dd HH:mm:ss' }  // Timestamp
+    ]
+  },
+  // 7. AI 學習反饋表（Phase 4+5 HITL 核心）
+  {
+    name: 'Eval_Feedback_Sheet',
+    headers: ['Feedback_ID', 'Interaction_ID', 'Product_ID', 'Original_Raw_Note', 'AI_Suggested_Stage', 'Human_Corrected_Stage', 'Feedback_Timestamp'],
+    columnWidths: [120, 120, 100, 400, 130, 150, 160],
+    validations: [],
+    formats: [
+      { col: 7, format: 'yyyy-MM-dd HH:mm:ss' }  // Feedback_Timestamp
+    ]
+  },
+  // 8. 任務待辦表（舊版保留，Ref_Entity 維持字串至 Phase 5）
   {
     name: 'Action_Backlog',
-    // 移除 GCal_Link；新增 Slack_Notified(6)、Slack_Notified_At(7)、Status(8)
     headers: ['Task_ID', 'Ref_Entity', 'Task_Detail', 'Due_Date', 'Reporter', 'Slack_Notified', 'Slack_Notified_At', 'Status'],
     columnWidths: [100, 180, 300, 130, 120, 120, 160, 100],
     validations: [
       { col: 8, values: ['pending', 'completed'] }  // Status
     ],
     formats: [
-      { col: 4, format: 'yyyy-MM-dd' },            // Due_Date
-      { col: 7, format: 'yyyy-MM-dd HH:mm:ss' }   // Slack_Notified_At
+      { col: 4, format: 'yyyy-MM-dd' },             // Due_Date
+      { col: 7, format: 'yyyy-MM-dd HH:mm:ss' }    // Slack_Notified_At
     ]
+  },
+  // 9. 產品線表（新版帶入）
+  {
+    name: 'Product_Lines',
+    headers: ['Product_ID', 'Name', 'Product_Owner', 'USP', 'Status', 'Target_Segments'],
+    columnWidths: [100, 180, 130, 300, 100, 200],
+    validations: [
+      { col: 5, values: ['Active', 'Beta', 'Sunset'] }  // Status
+    ],
+    formats: []
   }
 ];
 
@@ -214,37 +278,68 @@ function removeDefaultSheet_(ss) {
 // ID 自動遞增輔助函式（供 Phase 3 Dispatcher 使用）
 // ============================================================
 
-/**
- * 產生下一個 Entity ID (格式: E-0001)
- * @returns {string} 新的 Entity_ID
- */
-function getNextEntityId() {
-  return getNextId_('Entity_Index', 'E-', 4);
+// ============================================================
+// ID 生成函式（v2.0 — 對應合併後 9 張表）
+// ============================================================
+
+/** 產生下一個 Customer ID (格式: C-0001) */
+function getNextCustomerId() {
+  return getNextId_('Customers', 'C-', 4);
 }
 
-/**
- * 產生下一個 Project ID (格式: P-2025-0001)
- * @returns {string} 新的 Project_ID
- */
-function getNextProjectId() {
+/** 產生下一個 Partner ID (格式: PA-0001) */
+function getNextPartnerId() {
+  return getNextId_('Partners_Sheet', 'PA-', 4);
+}
+
+/** 產生下一個 Deal ID (格式: D-2026-0001) */
+function getNextDealId() {
   const year = new Date().getFullYear();
-  return getNextId_('Strategic_Pipeline', 'P-' + year + '-', 4);
+  return getNextId_('Deal_Matrix', 'D-' + year + '-', 4);
 }
 
-/**
- * 產生下一個 Log ID (格式: L-00001)
- * @returns {string} 新的 Log_ID
- */
-function getNextLogId() {
-  return getNextId_('Interaction_Timeline', 'L-', 5);
+/** 產生下一個 Interaction ID (格式: I-00001) */
+function getNextInteractionId() {
+  return getNextId_('Interactions', 'I-', 5);
 }
 
-/**
- * 產生下一個 Task ID (格式: T-00001)
- * @returns {string} 新的 Task_ID
- */
+/** 產生下一個 Stakeholder ID (格式: SK-0001) */
+function getNextStakeholderId() {
+  return getNextId_('Stakeholders', 'SK-', 4);
+}
+
+/** 產生下一個 Event ID (格式: EV-00001) */
+function getNextEventId() {
+  return getNextId_('Stage_Changed_Events', 'EV-', 5);
+}
+
+/** 產生下一個 Feedback ID (格式: FB-00001) */
+function getNextFeedbackId() {
+  return getNextId_('Eval_Feedback_Sheet', 'FB-', 5);
+}
+
+/** 產生下一個 Task ID (格式: T-00001) */
 function getNextTaskId() {
   return getNextId_('Action_Backlog', 'T-', 5);
+}
+
+/** 產生下一個 Product ID (格式: PL-0001) */
+function getNextProductId() {
+  return getNextId_('Product_Lines', 'PL-', 4);
+}
+
+// ---- 舊版相容性別名（供現有 dispatcher.js 過渡期使用，Phase 5 移除） ----
+/** @deprecated 請改用 getNextCustomerId() */
+function getNextEntityId() {
+  return getNextCustomerId();
+}
+/** @deprecated 請改用 getNextDealId() */
+function getNextProjectId() {
+  return getNextDealId();
+}
+/** @deprecated 請改用 getNextInteractionId() */
+function getNextLogId() {
+  return getNextInteractionId();
 }
 
 /**

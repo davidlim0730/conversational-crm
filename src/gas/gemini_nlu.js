@@ -155,7 +155,7 @@ function callGeminiNLU_(rawText, groundingContext) {
   // 將 Grounding Context 附加在 system prompt 末尾
   const fullSystemPrompt = SYSTEM_PROMPT + (groundingContext || '');
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey;
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite-preview-06-17:generateContent?key=' + apiKey;
 
   const requestBody = {
     system_instruction: {
