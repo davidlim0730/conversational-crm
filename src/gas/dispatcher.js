@@ -429,3 +429,54 @@ function fuzzyMatchEntity(inputName) {
   }
   return (bestMatch && bestScore >= 0.5) ? bestMatch : null;
 }
+
+// ============================================================
+// Handler: CREATE_ENTITY
+// ============================================================
+
+/**
+ * 建立新客戶（Customers）或夥伴（Partners_Sheet）
+ * 若名稱已存在（Fuzzy Match），跳過並回傳提示
+ * category='Client' → Customers；category='Partner' → Partners_Sheet
+ */
+function handleCreateEntities_(entities) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const results = [];
+
+  entities.forEach(function(entity) {
+    const isPartner = entity.category === 'Partner';
+
+    if (!isPartner) {
+      // --- 寫入 Customers ---
+      const match = fuzzyMatchEntity(entity.name);
+      if (match) {
+        results.push({ name: match, action: 'SKIPPED', reason: '已存在' });
+        return;
+      }
+      const newId = getNextCustomerId();
+      const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      const sheet = ss.getSheetByName('Customers');
+      // 欄位順序：Customer_ID, Company_Name, Industry, Key_Contact, Lead_Source, Status, Reporter, Created_At
+      sheet.appendRow([newId, entity.name, entity.industry || '', '', '', 'Prospect', 'System', now]);
+      results.push({ name: entity.name, action: 'CREATED', id: newId, table: 'Customers' });
+
+    } else {
+      // --- 寫入 Partners_Sheet ---
+      const sheet = ss.getSheetByName('Partners_Sheet');
+      if (sheet && sheet.getLastRow() > 1) {
+        const names = sheet.getRange(2, 2, sheet.getLastRow() - 1, 1).getValues().flat();
+        if (names.some(function(n) { return n === entity.name; })) {
+          results.push({ name: entity.name, action: 'SKIPPED', reason: '夥伴已存在' });
+          return;
+        }
+      }
+      const newId = getNextPartnerId();
+      const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      // 欄位順序：Partner_ID, Partner_Name, Partner_Type, Tier, Status, Reporter, Created_At
+      sheet.appendRow([newId, entity.name, '', '', 'Active', 'System', now]);
+      results.push({ name: entity.name, action: 'CREATED', id: newId, table: 'Partners_Sheet' });
+    }
+  });
+
+  return results;
+}
