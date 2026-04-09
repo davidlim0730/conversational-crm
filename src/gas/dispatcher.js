@@ -427,7 +427,7 @@ function fuzzyMatchEntity(inputName) {
       if (score > bestScore) { bestScore = score; bestMatch = name; }
     }
   }
-  return (bestMatch && bestScore >= 0.3) ? bestMatch : null;
+  return (bestMatch && bestScore >= 0.4) ? bestMatch : null;
 }
 
 // ============================================================
