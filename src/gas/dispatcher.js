@@ -311,3 +311,82 @@ function processPayload_(confirmedData) {
 
   return { written, slackFailed, slackError };
 }
+
+// ============================================================
+// 通用 CRUD 底層操作
+// ============================================================
+
+/**
+ * 新增列（依 header 順序組裝），自動產生 ID
+ * @param {string} sheetName - 表名
+ * @param {Object} data - 欄位名→值的物件（無需包含 ID）
+ * @param {string} idHeader - ID 欄位名（如 'Customer_ID'）
+ * @param {string} idPrefix - ID 前綴（如 'C-'）
+ * @returns {Object} { status: 'ok', id: newId }
+ */
+function addRow_(sheetName, data, idHeader, idPrefix) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { status: 'error', message: 'Sheet not found: ' + sheetName };
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const newId = generateNextId_(sheet, idPrefix);
+  data[idHeader] = newId;
+  const rowData = headers.map(function(h) { return data[h] !== undefined ? data[h] : ''; });
+  sheet.appendRow(rowData);
+  return { status: 'ok', id: newId };
+}
+
+/**
+ * 更新列（依 ID 搜尋，只更新 data 中有的欄位）
+ */
+function updateRow_(sheetName, idHeader, id, data) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet || sheet.getLastRow() <= 1) return { status: 'error', message: 'Sheet empty: ' + sheetName };
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idCol = headers.indexOf(idHeader) + 1;
+  if (idCol === 0) return { status: 'error', message: 'ID header not found: ' + idHeader };
+
+  const ids = sheet.getRange(2, idCol, sheet.getLastRow() - 1, 1).getValues().flat();
+  const rowIndex = ids.indexOf(id);
+  if (rowIndex === -1) return { status: 'error', message: 'ID not found: ' + id };
+
+  const actualRow = rowIndex + 2;
+  for (const key in data) {
+    const colIndex = headers.indexOf(key) + 1;
+    if (colIndex > 0) sheet.getRange(actualRow, colIndex).setValue(data[key]);
+  }
+  return { status: 'ok', id: id };
+}
+
+/**
+ * 刪除列（依 ID 搜尋）
+ */
+function deleteRow_(sheetName, idHeader, id) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet || sheet.getLastRow() <= 1) return { status: 'error', message: 'Sheet empty: ' + sheetName };
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const idCol = headers.indexOf(idHeader) + 1;
+  const ids = sheet.getRange(2, idCol, sheet.getLastRow() - 1, 1).getValues().flat();
+  const rowIndex = ids.indexOf(id);
+  if (rowIndex === -1) return { status: 'error', message: 'ID not found: ' + id };
+
+  sheet.deleteRow(rowIndex + 2);
+  return { status: 'ok', deletedId: id };
+}
+
+/**
+ * 通用 ID 產生器（取最後一列的 ID 遞增）
+ * 注意：各表有專用 getNextXxxId()，此函式供 addRow_ 使用
+ */
+function generateNextId_(sheet, prefix) {
+  if (sheet.getLastRow() <= 1) return prefix + '0001';
+  const lastId = sheet.getRange(sheet.getLastRow(), 1).getValue().toString();
+  const numPart = lastId.replace(prefix, '');
+  const next = (parseInt(numPart, 10) || 0) + 1;
+  return prefix + next.toString().padStart(4, '0');
+}
