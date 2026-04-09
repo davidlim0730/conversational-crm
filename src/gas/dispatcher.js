@@ -594,3 +594,59 @@ function updateDealStage_(dealId, newStage, reason, updatedBy) {
   }
   return { error: 'Deal not found: ' + dealId };
 }
+
+// ============================================================
+// Handler: LOG_INTERACTION
+// ============================================================
+
+/**
+ * 記錄互動日誌至 Interactions 表
+ * 欄位：Interaction_ID, Timestamp, Sales_Rep, Customer_ID, Product_ID,
+ *       Partner_ID, Raw_Notes, AI_Key_Insights, Extracted_Intent,
+ *       Sentiment, Is_Human_Corrected, Edit_Log
+ * @param {Array} interactions - 互動陣列
+ * @param {Array} editLog      - 使用者在前端修改的紀錄（JSON 字串化後寫入 Edit_Log）
+ */
+function handleLogInteractions_(interactions, editLog) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Interactions');
+  const editLogStr = (editLog && editLog.length > 0) ? JSON.stringify(editLog) : '';
+  const results = [];
+
+  interactions.forEach(function(interaction) {
+    let resolvedName = fuzzyMatchEntity(interaction.entity_name);
+    if (!resolvedName) {
+      handleCreateEntities_([{ name: interaction.entity_name, category: 'Client' }]);
+      resolvedName = interaction.entity_name;
+    }
+    const customerId = getCustomerIdByName_(resolvedName);
+
+    const newId = getNextInteractionId();
+    const now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+
+    // AI_Key_Insights 陣列轉 JSON 字串存入欄位
+    const insightsStr = JSON.stringify(interaction.ai_key_insights || []);
+
+    // 欄位順序：Interaction_ID, Timestamp, Sales_Rep, Customer_ID, Product_ID,
+    //           Partner_ID, Raw_Notes, AI_Key_Insights, Extracted_Intent,
+    //           Sentiment, Is_Human_Corrected, Edit_Log
+    sheet.appendRow([
+      newId,
+      now,
+      'System',                              // Sales_Rep（Phase 5 再做使用者識別）
+      customerId || resolvedName,            // Customer_ID
+      '',                                    // Product_ID（interaction 未必有）
+      '',                                    // Partner_ID
+      interaction.raw_transcript || '',      // Raw_Notes
+      insightsStr,                           // AI_Key_Insights（JSON array string）
+      '',                                    // Extracted_Intent（NLU v2 未輸出此欄，留空）
+      interaction.sentiment || 'Neutral',    // Sentiment
+      false,                                 // Is_Human_Corrected
+      editLogStr                             // Edit_Log
+    ]);
+
+    results.push({ entity_name: resolvedName, action: 'LOGGED', interaction_id: newId });
+  });
+
+  return results;
+}
